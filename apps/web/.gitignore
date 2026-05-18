@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# bun (workspace lockfile is managed at monorepo root)
+bun.lock
