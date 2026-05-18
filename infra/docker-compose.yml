@@ -1,0 +1,62 @@
+# AED — GSM SV deployment
+# n8n + nginx + certbot. Next.js는 Vercel에 별도 배포.
+#
+# 환경 변수는 같은 디렉토리의 .env에 둠. 예시는 .env.example 참조.
+
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: aed-n8n
+    restart: unless-stopped
+    expose:
+      - "5678"
+    environment:
+      - N8N_HOST=${AED_HOST}
+      - N8N_PROTOCOL=https
+      - N8N_PORT=5678
+      - WEBHOOK_URL=https://${AED_HOST}/
+      - GENERIC_TIMEZONE=Asia/Seoul
+      # HTTP Request 노드의 expression에서 $env 접근 허용 (Gemini key 등)
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      # 워크플로우에서 참조하는 외부 시크릿/키
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # webhook secret은 n8n credential (Header Auth)로 따로 등록 — env 불필요
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - aed
+    ports:
+      - "127.0.0.1:5678:5678"  # 로컬 디버그용 (외부 노출 X, nginx만 통해서)
+
+  nginx:
+    image: nginx:alpine
+    container_name: aed-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/aed.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+      - ./certbot/www:/var/www/certbot:ro
+    networks:
+      - aed
+    depends_on:
+      - n8n
+
+  # 인증서 발급/갱신 전용. `docker compose run --rm certbot certonly ...` 로 수동 실행.
+  certbot:
+    image: certbot/certbot:latest
+    container_name: aed-certbot
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    entrypoint: ""
+    command: ["sh", "-c", "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done"]
+
+volumes:
+  n8n_data:
+
+networks:
+  aed:
+    driver: bridge
