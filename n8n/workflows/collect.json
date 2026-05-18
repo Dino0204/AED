@@ -1,0 +1,99 @@
+{
+  "name": "AED — collect context",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "aed-collect",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth",
+        "options": { "rawBody": true }
+      },
+      "id": "n1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "webhookId": "aed-collect"
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const body = $input.first().json.body;\nif (!body || !body.owner || !body.repo || !body.token) throw new Error('owner, repo, token required');\nreturn [{ json: body }];"
+      },
+      "id": "n2",
+      "name": "Extract body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.github.com/repos/{{ $json.owner }}/{{ $json.repo }}/commits?per_page=30",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $json.token }}" },
+            { "name": "Accept", "value": "application/vnd.github+json" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n3",
+      "name": "List commits",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [600, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.github.com/repos/{{ $('Extract body').first().json.owner }}/{{ $('Extract body').first().json.repo }}/contents/.aed/memos.json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $('Extract body').first().json.token }}" },
+            { "name": "Accept", "value": "application/vnd.github+json" }
+          ]
+        },
+        "options": { "response": { "response": { "neverError": true } } }
+      },
+      "id": "n4",
+      "name": "Get memos.json",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [800, 300]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const commitsRes = $('List commits').first().json;\nconst memosRes = $('Get memos.json').first().json;\nconst commits = Array.isArray(commitsRes) ? commitsRes.map(c => ({ sha: c.sha?.slice(0,7), message: c.commit?.message, date: c.commit?.author?.date })) : [];\nlet memos = [];\nif (memosRes && memosRes.content) {\n  try {\n    const decoded = Buffer.from(memosRes.content, 'base64').toString('utf8');\n    memos = (JSON.parse(decoded).memos) || [];\n  } catch (e) { /* ignore */ }\n}\nreturn [{ json: { commits, memos } }];"
+      },
+      "id": "n5",
+      "name": "Build context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, commits: $json.commits, memos: $json.memos }) }}"
+      },
+      "id": "n6",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1200, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Extract body", "type": "main", "index": 0 }]] },
+    "Extract body": { "main": [[{ "node": "List commits", "type": "main", "index": 0 }]] },
+    "List commits": { "main": [[{ "node": "Get memos.json", "type": "main", "index": 0 }]] },
+    "Get memos.json": { "main": [[{ "node": "Build context", "type": "main", "index": 0 }]] },
+    "Build context": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

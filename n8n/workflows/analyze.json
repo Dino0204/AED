@@ -1,0 +1,255 @@
+{
+  "name": "AED — analyze portfolio",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "aed-analyze",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth",
+        "options": { "rawBody": true }
+      },
+      "id": "n1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "webhookId": "aed-analyze"
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const body = $input.first().json.body;\nif (!body || !body.owner || !body.repo || !body.token) throw new Error('owner, repo, token required');\nreturn [{ json: body }];"
+      },
+      "id": "n2",
+      "name": "Extract body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.github.com/repos/{{ $json.owner }}/{{ $json.repo }}/contents/.aed/portfolio.json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $json.token }}" },
+            { "name": "Accept", "value": "application/vnd.github+json" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n3",
+      "name": "Get portfolio.json",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [600, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.github.com/repos/{{ $('Extract body').first().json.owner }}/{{ $('Extract body').first().json.repo }}/contents/.aed/history.json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $('Extract body').first().json.token }}" },
+            { "name": "Accept", "value": "application/vnd.github+json" }
+          ]
+        },
+        "options": { "response": { "response": { "neverError": true } } }
+      },
+      "id": "n4",
+      "name": "Get history.json",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [800, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.github.com/repos/{{ $('Extract body').first().json.owner }}/{{ $('Extract body').first().json.repo }}/contents/.aed/memos.json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $('Extract body').first().json.token }}" },
+            { "name": "Accept", "value": "application/vnd.github+json" }
+          ]
+        },
+        "options": { "response": { "response": { "neverError": true } } }
+      },
+      "id": "n5",
+      "name": "Get memos.json",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.github.com/repos/{{ $('Extract body').first().json.owner }}/{{ $('Extract body').first().json.repo }}/commits?per_page=30",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $('Extract body').first().json.token }}" },
+            { "name": "Accept", "value": "application/vnd.github+json" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n6",
+      "name": "List commits",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 300]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const verify = $('Extract body').first().json;\nconst portfolioRes = $('Get portfolio.json').first().json;\nconst historyRes = $('Get history.json').first().json;\nconst memosRes = $('Get memos.json').first().json;\nconst commitsRes = $('List commits').first().json;\n\nfunction decode(b64) { try { return Buffer.from(b64, 'base64').toString('utf8'); } catch { return ''; } }\nfunction parseFile(res) {\n  if (!res || !res.content) return null;\n  try { return JSON.parse(decode(res.content)); } catch { return null; }\n}\n\nconst portfolio = parseFile(portfolioRes);\nif (!portfolio || !Array.isArray(portfolio.items)) throw new Error('portfolio.json missing or invalid — run bootstrap first');\n\nconst history = parseFile(historyRes) || { entries: [] };\nconst memos = (parseFile(memosRes) || { memos: [] }).memos || [];\nconst commits = Array.isArray(commitsRes) ? commitsRes.slice(0, 30).map(c => ({ sha: c.sha?.slice(0,7), message: (c.commit?.message || '').split('\\n')[0], date: c.commit?.author?.date?.slice(0,10) })) : [];\n\nconst itemsBrief = portfolio.items.map(i => ({ id: i.id, type: i.type, section: i.section, title: i.title, description: i.description, tags: i.tags }));\nconst historyBrief = (history.entries || []).map(e => ({ date: e.date, target_id: e.target_id, target_title: e.target_title, ai_suggestion: e.ai_suggestion, user_decision: e.user_decision, user_reason: e.user_reason }));\n\nconst prompt = `당신은 개발자 포트폴리오를 점검하는 큐레이션 어시스턴트입니다.\n\n현재 포트폴리오 manifest, 최근 컨텍스트(커밋·메모), 과거 큐레이션 히스토리를 보고 add/remove/keep 제안을 JSON으로 출력하세요.\n\n[현재 포트폴리오 manifest items]\n${JSON.stringify(itemsBrief, null, 2)}\n\n[최근 GitHub 커밋 (30개)]\n${JSON.stringify(commits, null, 2)}\n\n[직접 입력 메모]\n${JSON.stringify(memos, null, 2)}\n\n[과거 큐레이션 히스토리]\n${JSON.stringify(historyBrief, null, 2)}\n\n출력 규칙:\n- 반드시 다음 JSON 스키마만 출력: { \"suggestions\": [{ \"target_id\": \"...\", \"target_title\": \"...\", \"suggestion\": \"add|remove|keep\", \"ai_reason\": \"한국어 한두 문장\" }] }\n- target_id: 기존 items의 id를 그대로 쓰거나(remove/keep), 신규 추가 시 \"suggested-{kebab-slug}\" 형식\n- target_title: 사람이 읽을 짧은 제목\n- suggestion: 사용자 메모와 히스토리를 우선 반영. 과거에 거부한 항목은 같은 근거로 다시 제안하지 말 것\n- 제안 개수는 1~5개. 너무 일반적인 제안 금지\n- ai_reason은 메모/커밋/히스토리의 구체적 근거 인용\n`;\n\nreturn [{ json: { owner: verify.owner, repo: verify.repo, token: verify.token, prompt, items: portfolio.items } }];"
+      },
+      "id": "n7",
+      "name": "Build prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1400, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-goog-api-key", "value": "={{ $env.GEMINI_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contents: [{ parts: [{ text: $json.prompt }] }], generationConfig: { responseMimeType: \"application/json\", temperature: 0.3 } }) }}",
+        "options": {}
+      },
+      "id": "n8",
+      "name": "Call Gemini",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1600, 300]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const prev = $('Build prompt').first().json;\nconst res = $input.first().json;\nconst text = res.candidates?.[0]?.content?.parts?.[0]?.text;\nif (!text) throw new Error('Gemini no text: ' + JSON.stringify(res).slice(0,300));\nlet parsed;\ntry { parsed = JSON.parse(text); } catch (e) { throw new Error('Non-JSON: ' + text.slice(0,300)); }\nif (!parsed.suggestions || !Array.isArray(parsed.suggestions)) throw new Error('Missing suggestions[]');\n\nconst itemMap = new Map(prev.items.map(i => [i.id, i]));\nconst issueItems = parsed.suggestions.filter(s => s && s.target_id && s.suggestion).map(s => {\n  const existing = itemMap.get(s.target_id);\n  const title = s.target_title || existing?.title || s.target_id;\n  const verb = s.suggestion;\n  const issueTitle = `[AED] ${verb}: ${title} (${s.target_id})`;\n  const issueBody = `<!-- target_id: ${s.target_id} -->\\n<!-- suggestion: ${verb} -->\\n\\n**AI 제안**: \\`${verb}\\`\\n\\n**대상**: ${title}\\n\\n**근거**: ${s.ai_reason || '(없음)'}\\n\\n---\\n_AED 자동 생성. /mypage/issues에서 수용/거부를 결정하세요._`;\n  return { owner: prev.owner, repo: prev.repo, token: prev.token, title: issueTitle, body: issueBody, labels: ['aed-suggestion'], target_id: s.target_id };\n});\n\nreturn [{ json: { suggestionCount: issueItems.length, issueItems, owner: prev.owner, repo: prev.repo, token: prev.token } }];"
+      },
+      "id": "n9",
+      "name": "Parse suggestions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1800, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            { "id": "c1", "leftValue": "={{ $json.suggestionCount }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "n10",
+      "name": "Has suggestions?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2000, 300]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "issueItems",
+        "options": {}
+      },
+      "id": "n11",
+      "name": "Split issue items",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [2200, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.github.com/repos/{{ $json.owner }}/{{ $json.repo }}/issues",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $json.token }}" },
+            { "name": "Accept", "value": "application/vnd.github+json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ title: $json.title, body: $json.body, labels: $json.labels }) }}",
+        "options": {}
+      },
+      "id": "n12",
+      "name": "Create issue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2400, 200]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nconst issues = items.map(i => ({ number: i.json.number, url: i.json.html_url, title: i.json.title })).filter(x => x.number);\nreturn [{ json: { ok: true, count: issues.length, issues } }];"
+      },
+      "id": "n13",
+      "name": "Aggregate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2600, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "n14",
+      "name": "Respond success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2800, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, count: 0, issues: [], message: '새로운 제안 없음' }) }}"
+      },
+      "id": "n15",
+      "name": "Respond empty",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2200, 400]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Extract body", "type": "main", "index": 0 }]] },
+    "Extract body": { "main": [[{ "node": "Get portfolio.json", "type": "main", "index": 0 }]] },
+    "Get portfolio.json": { "main": [[{ "node": "Get history.json", "type": "main", "index": 0 }]] },
+    "Get history.json": { "main": [[{ "node": "Get memos.json", "type": "main", "index": 0 }]] },
+    "Get memos.json": { "main": [[{ "node": "List commits", "type": "main", "index": 0 }]] },
+    "List commits": { "main": [[{ "node": "Build prompt", "type": "main", "index": 0 }]] },
+    "Build prompt": { "main": [[{ "node": "Call Gemini", "type": "main", "index": 0 }]] },
+    "Call Gemini": { "main": [[{ "node": "Parse suggestions", "type": "main", "index": 0 }]] },
+    "Parse suggestions": { "main": [[{ "node": "Has suggestions?", "type": "main", "index": 0 }]] },
+    "Has suggestions?": {
+      "main": [
+        [{ "node": "Split issue items", "type": "main", "index": 0 }],
+        [{ "node": "Respond empty", "type": "main", "index": 0 }]
+      ]
+    },
+    "Split issue items": { "main": [[{ "node": "Create issue", "type": "main", "index": 0 }]] },
+    "Create issue": { "main": [[{ "node": "Aggregate", "type": "main", "index": 0 }]] },
+    "Aggregate": { "main": [[{ "node": "Respond success", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

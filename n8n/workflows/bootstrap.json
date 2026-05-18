@@ -1,0 +1,160 @@
+{
+  "name": "AED — bootstrap manifest",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "aed-bootstrap",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth",
+        "options": { "rawBody": true }
+      },
+      "id": "n1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "webhookId": "aed-bootstrap"
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const body = $input.first().json.body;\nif (!body || !body.owner || !body.repo || !body.token) throw new Error('owner, repo, token required');\nreturn [{ json: body }];"
+      },
+      "id": "n2",
+      "name": "Extract body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $json.token }}" },
+            { "name": "Accept", "value": "application/vnd.github+json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: `query($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { sections: object(expression: \"HEAD:src/sections\") { ... on Tree { entries { name object { ... on Blob { text } } } } } claudeMd: object(expression: \"HEAD:CLAUDE.md\") { ... on Blob { text } } } }`, variables: { owner: $json.owner, repo: $json.repo } }) }}",
+        "options": {}
+      },
+      "id": "n3",
+      "name": "Fetch sources (GraphQL)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [600, 300]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const verify = $('Extract body').first().json;\nconst gql = $input.first().json;\nconst repo = gql.data?.repository;\nif (!repo) throw new Error('GraphQL returned no repository: ' + JSON.stringify(gql).slice(0,300));\nconst entries = repo.sections?.entries || [];\nconst tsxFiles = entries.filter(e => e.name.endsWith('.tsx'));\nlet sectionsText = '';\nfor (const f of tsxFiles) sectionsText += `\\n\\n=== src/sections/${f.name} ===\\n` + (f.object?.text || '');\nconst claudeMd = repo.claudeMd?.text || '';\nconst prompt = `You are analyzing a developer portfolio (Vite + React SPA) to build a manifest of portfolio items.\\n\\nGiven the following section files (.tsx) and the CLAUDE.md context, produce a JSON manifest of distinct portfolio items.\\n\\n[CLAUDE.md]\\n${claudeMd}\\n\\n[Section files]${sectionsText}\\n\\nOutput JSON only matching this schema:\\n{\\n  \"version\": \"1.0\",\\n  \"items\": [\\n    { \"id\": \"kebab-id\", \"type\": \"project|skill|award|experience\", \"section\": \"Projects|About|...\", \"title\": \"...\", \"description\": \"...\", \"tags\": [\"...\"], \"source_file\": \"src/sections/X.tsx\" }\\n  ]\\n}\\n\\nIds must be unique, kebab-case, prefixed by type (project-, skill-, award-, experience-).\\nRespond in Korean for title/description if the source content is Korean.`;\nreturn [{ json: { owner: verify.owner, repo: verify.repo, token: verify.token, prompt } }];"
+      },
+      "id": "n4",
+      "name": "Build prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-goog-api-key", "value": "={{ $env.GEMINI_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contents: [{ parts: [{ text: $json.prompt }] }], generationConfig: { responseMimeType: \"application/json\", temperature: 0.2 } }) }}",
+        "options": {}
+      },
+      "id": "n5",
+      "name": "Call Gemini",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const prev = $('Build prompt').first().json;\nconst res = $input.first().json;\nconst text = res.candidates?.[0]?.content?.parts?.[0]?.text;\nif (!text) throw new Error('Gemini no text: ' + JSON.stringify(res).slice(0,300));\nlet parsed;\ntry { parsed = JSON.parse(text); } catch (e) { throw new Error('Non-JSON response: ' + text.slice(0,300)); }\nif (!parsed.items || !Array.isArray(parsed.items)) throw new Error('Manifest missing items[]');\nparsed.generated_at = new Date().toISOString();\nparsed.version = parsed.version || '1.0';\nconst content = Buffer.from(JSON.stringify(parsed, null, 2) + '\\n').toString('base64');\nreturn [{ json: { owner: prev.owner, repo: prev.repo, token: prev.token, content, itemCount: parsed.items.length } }];"
+      },
+      "id": "n6",
+      "name": "Parse manifest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.github.com/repos/{{ $json.owner }}/{{ $json.repo }}/contents/.aed/portfolio.json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $json.token }}" },
+            { "name": "Accept", "value": "application/vnd.github+json" }
+          ]
+        },
+        "options": { "response": { "response": { "neverError": true } } }
+      },
+      "id": "n7",
+      "name": "Get existing SHA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 300]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://api.github.com/repos/{{ $('Parse manifest').first().json.owner }}/{{ $('Parse manifest').first().json.repo }}/contents/.aed/portfolio.json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $('Parse manifest').first().json.token }}" },
+            { "name": "Accept", "value": "application/vnd.github+json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ message: 'aed: bootstrap portfolio manifest', content: $('Parse manifest').first().json.content, sha: $json.sha }) }}",
+        "options": {}
+      },
+      "id": "n8",
+      "name": "PUT manifest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1600, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, itemCount: $('Parse manifest').first().json.itemCount, commit: $json.commit?.sha }) }}"
+      },
+      "id": "n9",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1800, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Extract body", "type": "main", "index": 0 }]] },
+    "Extract body": { "main": [[{ "node": "Fetch sources (GraphQL)", "type": "main", "index": 0 }]] },
+    "Fetch sources (GraphQL)": { "main": [[{ "node": "Build prompt", "type": "main", "index": 0 }]] },
+    "Build prompt": { "main": [[{ "node": "Call Gemini", "type": "main", "index": 0 }]] },
+    "Call Gemini": { "main": [[{ "node": "Parse manifest", "type": "main", "index": 0 }]] },
+    "Parse manifest": { "main": [[{ "node": "Get existing SHA", "type": "main", "index": 0 }]] },
+    "Get existing SHA": { "main": [[{ "node": "PUT manifest", "type": "main", "index": 0 }]] },
+    "PUT manifest": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
