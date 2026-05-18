@@ -42,6 +42,27 @@ aed/
 - Code 노드 sandbox 제약에 주의 (외부 모듈 사용 불가)
 - `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` 환경에서 실행
 
+## 브랜치 전략
+
+Git Flow 변형 전략 사용.
+
+```
+main (프로덕션)
+  ↑
+  └─ develop (개발 베이스) ← PR merge 대상
+       ↑
+       ├─ feat/<설명>
+       ├─ fix/<설명>
+       ├─ refactor/<설명>
+       └─ chore/<설명>
+```
+
+- 브랜치명: `type/kebab-case-설명` 형식 (소문자, 하이픈 구분)
+- 모든 작업 브랜치는 `develop`에서 분기하고 `develop`으로 PR
+- `main` ← `develop` merge는 릴리즈 시점에만
+
+**예시**: `feat/github-oauth`, `fix/n8n-env-parsing`, `chore/nginx-config`
+
 ## 커밋 컨벤션
 
 포맷: `type(scope): 설명`
