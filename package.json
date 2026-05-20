@@ -1,8 +1,11 @@
 {
   "name": "aed",
   "private": true,
+  "workspaces": ["apps/web", "apps/extension"],
   "scripts": {
     "dev": "concurrently -n n8n,web -c blue,green \"docker start aed-n8n\" \"bun --cwd apps/web dev\"",
+    "dev:ext": "bun --cwd apps/extension dev",
+    "build:ext": "bun --cwd apps/extension build",
     "n8n:init": "docker run -d -p 5678:5678 -v ~/.n8n:/home/node/.n8n -e N8N_BLOCK_ENV_ACCESS_IN_NODE=false -e GEMINI_API_KEY=${GEMINI_API_KEY} --name aed-n8n n8nio/n8n"
   },
   "devDependencies": {

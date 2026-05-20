@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "AED - Portfolio Curator",
+  "version": "1.0.0",
+  "description": "어떤 페이지에서든 포트폴리오 메모 추가, AI 제안 검토, 결정 기록",
+  "permissions": ["sidePanel", "storage", "tabs", "activeTab"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "src/background/index.ts",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/index.ts"],
+      "run_at": "document_idle"
+    }
+  ],
+  "side_panel": {
+    "default_path": "src/sidepanel/index.html"
+  },
+  "action": {
+    "default_title": "AED Portfolio Curator"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
