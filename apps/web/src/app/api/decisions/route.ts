@@ -4,6 +4,7 @@ import { requireSessionToken } from "@/lib/session";
 import { getJsonFile, putJsonFile } from "@/lib/aed-files";
 import { HistorySchema } from "@/lib/schemas";
 import { closeIssueWithLabel } from "@/lib/issues";
+import { withCors, corsPreflightResponse } from "@/lib/cors";
 
 const BodySchema = z.object({
   issue_number: z.number().int().positive(),
@@ -16,8 +17,12 @@ const BodySchema = z.object({
   reason: z.string().default(""),
 });
 
+export async function OPTIONS(req: Request) {
+  return corsPreflightResponse(req);
+}
+
 export async function POST(request: Request) {
-  const token = await requireSessionToken();
+  const token = await requireSessionToken(request);
   const json = await request.json().catch(() => null);
   const parsed = BodySchema.safeParse(json);
   if (!parsed.success) {
@@ -56,5 +61,5 @@ export async function POST(request: Request) {
   );
   await closeIssueWithLabel(token, input.issue_number, input.accepted);
 
-  return NextResponse.json({ ok: true, entry });
+  return withCors(NextResponse.json({ ok: true, entry }), request);
 }

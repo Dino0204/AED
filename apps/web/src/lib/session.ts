@@ -39,7 +39,11 @@ export async function consumeOAuthState(): Promise<string | null> {
   return value;
 }
 
-export async function requireSessionToken(): Promise<string> {
+export async function requireSessionToken(req?: Request): Promise<string> {
+  if (req) {
+    const auth = req.headers.get("Authorization");
+    if (auth?.startsWith("Bearer ")) return auth.slice(7);
+  }
   const token = await getSessionToken();
   if (!token) throw new Response("Unauthorized", { status: 401 });
   return token;
